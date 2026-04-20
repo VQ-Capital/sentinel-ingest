@@ -1,3 +1,4 @@
+// ========== DOSYA: sentinel-ingest/src/main.rs ==========
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use prost::Message;
@@ -7,7 +8,7 @@ use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as WsMessa
 use tracing::{error, info, warn};
 
 pub mod sentinel_market {
-    include!(concat!(env!("OUT_DIR"), "/sentinel.market.v1.rs")); // v1 yapıldı
+    include!(concat!(env!("OUT_DIR"), "/sentinel.market.v1.rs"));
 }
 use sentinel_market::AggTrade as ProtoAggTrade;
 
@@ -30,9 +31,10 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let nats_url =
         std::env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string());
+
     let nats_client = async_nats::connect(&nats_url)
         .await
-        .context("NATS Hatası")?;
+        .context("CRITICAL: NATS sunucusuna bağlanılamadı. Sistem başlatılamıyor.")?;
 
     let binance_ws_url = "wss://stream.binance.com:9443/ws/btcusdt@aggTrade";
 
@@ -49,7 +51,7 @@ async fn main() -> Result<()> {
                     match message {
                         Ok(WsMessage::Text(text)) => {
                             if let Ok(trade) = serde_json::from_str::<BinanceAggTrade>(&text) {
-                                // SAĞLAMLAŞTIRMA: Parse edilemezse 0 yapma, tick'i tamamen çöpe at!
+                                // SAĞLAMLAŞTIRMA: Parse edilemezse paketi sessizce (veya loglayarak) çöpe at
                                 let Ok(price) = trade.price.parse::<f64>() else {
                                     continue;
                                 };
@@ -66,15 +68,23 @@ async fn main() -> Result<()> {
                                 };
 
                                 let mut buf = Vec::new();
-                                proto_msg.encode(&mut buf).unwrap();
+                                // ZERO-TOLERANCE: unwrap() kullanılamaz!
+                                if let Err(e) = proto_msg.encode(&mut buf) {
+                                    warn!("⚠️ Protobuf Encode Hatası (Paket Atıldı): {}", e);
+                                    continue;
+                                }
+
                                 let subject = format!("market.trade.binance.{}", trade.symbol);
 
-                                let _ = nats_client.publish(subject, buf.into()).await;
+                                // NATS gönderim hatasını çökertmek yerine sadece logla
+                                if let Err(e) = nats_client.publish(subject, buf.into()).await {
+                                    warn!("⚠️ NATS Publish Hatası: {}", e);
+                                }
                             }
                         }
                         Ok(WsMessage::Close(_)) => break, // Döngüyü kır, dış loop yeniden bağlansın
                         Err(e) => {
-                            error!("WebSocket Okuma Hatası: {:?}", e);
+                            error!("❌ WebSocket Okuma Hatası: {:?}", e);
                             break;
                         }
                         _ => {}
@@ -82,7 +92,7 @@ async fn main() -> Result<()> {
                 }
             }
             Err(e) => error!(
-                "Bağlantı reddedildi, 3 saniye sonra tekrar denenecek: {:?}",
+                "❌ Bağlantı reddedildi, 3 saniye sonra tekrar denenecek: {:?}",
                 e
             ),
         }
