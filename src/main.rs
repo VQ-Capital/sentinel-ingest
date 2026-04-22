@@ -26,6 +26,15 @@ struct BinanceAggTrade {
     is_buyer_maker: bool,
 }
 
+// MULTI-STREAM ZARF YAPISI
+#[derive(Debug, Deserialize)]
+struct BinanceStreamEvent {
+    #[allow(dead_code)]
+    // ÇÖZÜM: Clippy linter'a bu alanın sadece JSON parse için olduğunu belirtiyoruz.
+    stream: String,
+    data: BinanceAggTrade,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
@@ -36,22 +45,31 @@ async fn main() -> Result<()> {
         .await
         .context("CRITICAL: NATS sunucusuna bağlanılamadı. Sistem başlatılamıyor.")?;
 
-    let binance_ws_url = "wss://stream.binance.com:9443/ws/btcusdt@aggTrade";
+    // MULTI-COIN HEDEFLERİ
+    let symbols = ["btcusdt", "ethusdt", "solusdt", "bnbusdt"];
+    let streams: Vec<String> = symbols.iter().map(|s| format!("{}@aggTrade", s)).collect();
+    let binance_ws_url = format!(
+        "wss://stream.binance.com:9443/stream?streams={}",
+        streams.join("/")
+    );
 
-    // RECONNECT DÖNGÜSÜ (Bağlantı koparsa NATS düşmez, sadece veri durur ve yeniden dener)
     loop {
-        info!("🔄 Binance WebSocket'e bağlanılıyor: {}", binance_ws_url);
+        info!(
+            "🔄 Binance Multi-Coin WebSocket'e bağlanılıyor: {}",
+            binance_ws_url
+        );
 
-        match connect_async(binance_ws_url).await {
+        match connect_async(&binance_ws_url).await {
             Ok((ws_stream, _)) => {
-                info!("✅ Bağlantı başarılı. Veri akışı başladı.");
+                info!("✅ Multi-Coin Bağlantı başarılı. Veri akışı başladı.");
                 let (_, mut read) = ws_stream.split();
 
                 while let Some(message) = read.next().await {
                     match message {
                         Ok(WsMessage::Text(text)) => {
-                            if let Ok(trade) = serde_json::from_str::<BinanceAggTrade>(&text) {
-                                // SAĞLAMLAŞTIRMA: Parse edilemezse paketi sessizce (veya loglayarak) çöpe at
+                            if let Ok(event) = serde_json::from_str::<BinanceStreamEvent>(&text) {
+                                let trade = event.data;
+
                                 let Ok(price) = trade.price.parse::<f64>() else {
                                     continue;
                                 };
@@ -68,21 +86,18 @@ async fn main() -> Result<()> {
                                 };
 
                                 let mut buf = Vec::new();
-                                // ZERO-TOLERANCE: unwrap() kullanılamaz!
                                 if let Err(e) = proto_msg.encode(&mut buf) {
-                                    warn!("⚠️ Protobuf Encode Hatası (Paket Atıldı): {}", e);
+                                    warn!("⚠️ Protobuf Encode Hatası: {}", e);
                                     continue;
                                 }
 
                                 let subject = format!("market.trade.binance.{}", trade.symbol);
-
-                                // NATS gönderim hatasını çökertmek yerine sadece logla
                                 if let Err(e) = nats_client.publish(subject, buf.into()).await {
                                     warn!("⚠️ NATS Publish Hatası: {}", e);
                                 }
                             }
                         }
-                        Ok(WsMessage::Close(_)) => break, // Döngüyü kır, dış loop yeniden bağlansın
+                        Ok(WsMessage::Close(_)) => break,
                         Err(e) => {
                             error!("❌ WebSocket Okuma Hatası: {:?}", e);
                             break;
