@@ -1,6 +1,17 @@
-# 📡 sentinel-ingest (The Vacuum)
+# 📡 sentinel-market-ingest
 
-**Sorumluluk:** Dış dünyadan (Binance, Hyperliquid) gelen anlık WebSocket verilerini (Trade, Orderbook) mikrosaniye gecikmeyle yakalamak.
-**Kural:** Bu servis hiçbir veritabanına bağlanmaz. Hiçbir hesaplama yapmaz.
-**Çıktı:** Gelen JSON verisini `sentinel-spec/proto/market_data.proto` yapısına dönüştürür ve `NATS JetStream` üzerindeki `market.trade.*` kanallarına fırlatır.
-**Dil:** Rust (`tokio`, `tokio-tungstenite`, `async-nats`)
+Görev: Borsalardan gelen anlık fiyat ve tahta verisi.
+
+Kaynaklar: Binance, Hyperliquid, OKX.
+
+NATS Subject: market.trade.*, market.orderbook.*
+
+Karakter: Mikrosaniye hassasiyetli, en hızlı döngü.
+
+---
+
+Karakter: Sıfır gecikme (Zero-Latency). Sadece borsa WebSockets/FIX.
+
+Veri: Trade, L2 Orderbook, Liquidations.
+
+SaaS Değeri: Kurumsal yatırımcıya "En Temiz Ham Fiyat Akışı" olarak satılır.
