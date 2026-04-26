@@ -68,8 +68,12 @@ async fn main() -> Result<()> {
 
     loop {
         info!(
-            "🔄 Binance Multi-Stream (Trade + Depth) Bağlanılıyor: {}",
-            binance_ws_url
+            "🔄 Binance Multi-Stream (Trade + Depth) | symbols: {}",
+            symbols
+                .iter()
+                .map(|s| s.to_uppercase())
+                .collect::<Vec<_>>()
+                .join(", ")
         );
 
         match connect_async(&binance_ws_url).await {
