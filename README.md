@@ -1,17 +1,10 @@
-# 📡 sentinel-market-ingest
+# 📈 sentinel-market-ingest (Legacy: sentinel-ingest)
 
-Görev: Borsalardan gelen anlık fiyat ve tahta verisi.
+**Domain:** L2 Market Data & Tick Ingestion
+**Rol:** Sistemin Gözleri (Sayısal)
 
-Kaynaklar: Binance, Hyperliquid, OKX.
+Bu servis, borsalardan (Binance vb.) gelen saf matematiksel verilerin (Fiyat, Hacim, L2 Emir Defteri) sisteme girdiği ilk kapıdır. Sıfır gecikme (Zero-Latency) hedefiyle çalışır ve bellekte allocation (tahsis) yapmaktan kaçınır.
 
-NATS Subject: market.trade.*, market.orderbook.*
-
-Karakter: Mikrosaniye hassasiyetli, en hızlı döngü.
-
----
-
-Karakter: Sıfır gecikme (Zero-Latency). Sadece borsa WebSockets/FIX.
-
-Veri: Trade, L2 Orderbook, Liquidations.
-
-SaaS Değeri: Kurumsal yatırımcıya "En Temiz Ham Fiyat Akışı" olarak satılır.
+- **Kaynaklar:** Binance WSS, Hyperliquid L2
+- **NATS Çıktısı:** `market.trade.*`, `market.orderbook.*`
+- **SLA Hedefi:** < 10ms
