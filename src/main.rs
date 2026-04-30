@@ -7,6 +7,9 @@ use tokio::time::{sleep, Duration};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as WsMessage};
 use tracing::{error, info, warn};
 
+mod config;
+use config::IngestConfig;
+
 pub mod sentinel_market {
     include!(concat!(env!("OUT_DIR"), "/sentinel.market.v1.rs"));
 }
@@ -24,14 +27,12 @@ struct BinanceAggTrade {
     is_buyer_maker: bool,
 }
 
-// Orderbook Depth için Binance Veri Formatı
 #[derive(Debug, Deserialize)]
 struct BinanceDepth {
-    bids: Vec<[String; 2]>, // [Fiyat, Miktar]
-    asks: Vec<[String; 2]>, // [Fiyat, Miktar]
+    bids: Vec<[String; 2]>,
+    asks: Vec<[String; 2]>,
 }
 
-// Gelen JSON Polymorphic (Çok Biçimli) olduğu için Untagged Enum kullanıyoruz (Zero-Allocation Parsing)
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum BinanceData {
@@ -48,17 +49,22 @@ struct BinanceStreamEvent {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
-    let nats_url =
-        std::env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string());
-    let nats_client = async_nats::connect(&nats_url)
-        .await
-        .context("CRITICAL: NATS sunucusuna bağlanılamadı.")?;
+    let config = IngestConfig::from_env();
 
-    let symbols = ["btcusdt", "ethusdt", "solusdt", "bnbusdt"];
+    info!(
+        "📡 Service: {} | Version: 0.2.1 (V7 Dynamic Symbols)",
+        env!("CARGO_PKG_NAME")
+    );
+
+    let nats_client = async_nats::connect(&config.nats_url)
+        .await
+        .context("NATS Error")?;
+
     let mut streams = Vec::new();
-    for s in symbols.iter() {
-        streams.push(format!("{}@aggTrade", s));
-        streams.push(format!("{}@depth10@100ms", s)); // YENİ: L2 ORDERBOOK DERİNLİĞİ EKLENDİ
+    for s in config.active_symbols.iter() {
+        let lower_s = s.to_lowercase();
+        streams.push(format!("{}@aggTrade", lower_s));
+        streams.push(format!("{}@depth10@100ms", lower_s));
     }
 
     let binance_ws_url = format!(
@@ -68,25 +74,18 @@ async fn main() -> Result<()> {
 
     loop {
         info!(
-            "🔄 Binance Multi-Stream (Trade + Depth) | symbols: {}",
-            symbols
-                .iter()
-                .map(|s| s.to_uppercase())
-                .collect::<Vec<_>>()
-                .join(", ")
+            "🔄 Binance Multi-Stream | Symbols: {:?}",
+            config.active_symbols
         );
 
         match connect_async(&binance_ws_url).await {
             Ok((ws_stream, _)) => {
-                info!(
-                    "✅ [HFT-DATA] Multi-Stream Bağlantı başarılı. L2 Orderbook ve Trades Akıyor."
-                );
+                info!("✅ [HFT-DATA] Multi-Stream Bağlantı başarılı.");
                 let (_, mut read) = ws_stream.split();
 
                 while let Some(message) = read.next().await {
                     if let Ok(WsMessage::Text(text)) = message {
                         if let Ok(event) = serde_json::from_str::<BinanceStreamEvent>(&text) {
-                            // Stream adından sembolü çıkar (örn: "btcusdt@aggTrade" -> "BTCUSDT")
                             let symbol = event
                                 .stream
                                 .split('@')
@@ -118,7 +117,6 @@ async fn main() -> Result<()> {
                                     }
                                 }
                                 BinanceData::Depth(depth) => {
-                                    // Orderbook Protobuf Dönüşümü
                                     let mut proto_bids = Vec::with_capacity(depth.bids.len());
                                     for b in depth.bids {
                                         if let (Ok(p), Ok(q)) =
@@ -130,7 +128,6 @@ async fn main() -> Result<()> {
                                             });
                                         }
                                     }
-
                                     let mut proto_asks = Vec::with_capacity(depth.asks.len());
                                     for a in depth.asks {
                                         if let (Ok(p), Ok(q)) =
@@ -142,14 +139,12 @@ async fn main() -> Result<()> {
                                             });
                                         }
                                     }
-
                                     let proto_msg = OrderbookDepth {
                                         symbol: symbol.clone(),
                                         bids: proto_bids,
                                         asks: proto_asks,
                                         timestamp: chrono::Utc::now().timestamp_millis(),
                                     };
-
                                     let mut buf = Vec::new();
                                     if proto_msg.encode(&mut buf).is_ok() {
                                         let _ = nats_client
